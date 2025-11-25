@@ -42,7 +42,6 @@ class CollectionConfig:
     # Subreddits to target; "all" means the global 'r/all' feed
     target_subreddits: List[str] = field(
         default_factory=lambda: [
-            "all",
             "news",
             "worldnews",
             "politics",
