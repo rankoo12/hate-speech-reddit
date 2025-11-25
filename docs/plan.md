@@ -10,6 +10,13 @@ Scored risky users feed: username, score, explanation
 
 Enriched user history for approximately two months
 
+Core design decision:
+
+We always scrape the newest posts from selected subreddits (no Reddit search).
+We do not pre-filter posts by simple keywords.
+Every collected post is scored using a rule-based risk model.
+Thresholds on the risk score determine which posts and users are considered risky.
+
 This plan defines the pipeline, architecture, modules, and development steps.
 
 1. Data Collection Strategy (HTML Scraping)
@@ -23,7 +30,7 @@ Easy to parse
 
 Contains post metadata
 
-Supports search and pagination
+Supports pagination
 
 Supports user history pages
 
@@ -43,69 +50,44 @@ PublicFreakout
 
 unpopularopinion
 
-1.2 Search Terms
+Palestine
 
-Configurable keywords:
+1.2 How We Scrape Posts (Discovery Step)
 
-kill
+We do not use Reddit’s search bar.
 
-bomb
+For each subreddit in target_subreddits:
 
-attack
+Start at:
+https://old.reddit.com/r/{subreddit}/?sort=new
 
-genocide
+For each page:
 
-racist
-
-hate speech
-
-violent
-
-extremist
-
-terrorist
-
-lynch
-
-1.3 How We Scrape Posts (Discovery Step)
-
-For each (subreddit, query) pair:
-
-Construct URLs such as:
-
-https://old.reddit.com/r/SUBREDDIT/search/?q=kill&restrict_sr=on&sort=new
-
-Or global search:
-
-https://old.reddit.com/search/?q=kill&sort=new
-
-For each search results page:
-
-Send GET request with custom User-Agent.
-
-Parse <div class="thing"> elements.
-
+Send a GET request with a custom User-Agent.
+Parse <div class="thing"> elements (each represents a post).
 Extract:
 
-post id
+- post id
+- title
+- text or selftext (if available)
+- author
+- subreddit
+- timestamp (from <time datetime="...">)
+- permalink / URL
 
-title
+Convert each entry into a Post dataclass instance.
 
-text or selftext
+Follow the "next page" link for pagination.
 
-author
+Stop when:
 
-subreddit
+- The total number of posts reaches a configured limit (for example: 150 posts in total), or
+- We have processed a configured number of pages per subreddit, or
+- All posts on the page are older than a lookback window (if enforced at collection time).
 
-timestamp (from <time datetime="...">)
+Every collected post is later evaluated by the risk scoring model; there is no separate keyword-based discovery filter.
 
-permalink
-
-Follow "next page" link for pagination.
-
-Stop at a global post cap (for example: 150 posts).
-
-Posts are stored as custom Post dataclasses.
+Posts are stored as Post dataclasses and serialized into data/raw_posts.json.
 
 2. Data Enrichment Strategy (User History)
 
@@ -132,38 +114,47 @@ text or comment body
 
 timestamp
 
-Collect items newer than 60 days (approximately 2 months).
+URL/permalink
 
-Stop when items fall outside the time window.
+Convert timestamps to datetimes and keep only items newer than 60 days (approximately 2 months).
+
+Stop when items fall outside the time window or when there are no more pages.
 
 Save as UserPost dataclasses.
 
 3. Risk Scoring Methodology
    3.1 Post-Level Scoring
 
+For each Post.text:
+
+Preprocessing:
+
+- Lowercasing.
+- Basic tokenization (split on whitespace and punctuation).
+
 Features include:
 
 Violent keywords
 
-Hate keywords
+Hate/offensive keywords and slurs
 
-Intensity modifiers
+Intensity modifiers (for example: must, should, deserve)
 
-Threat patterns
+Threat patterns (for example: "I will kill", "we should bomb", "they deserve to die")
 
 All-caps ratio
 
-Keyword density
+Keyword density (multiple strong terms in short text)
 
 Scoring algorithm:
 
 Weighted sum of features, normalized to [0, 1].
 
-Produce a breakdown for explanation purposes.
+Produce a breakdown (which features contributed) for explanation purposes.
 
 3.2 User-Level Scoring
 
-Take the user’s last 60 days of posts and comments.
+Take the user’s last 60 days of posts and comments (all UserPost items).
 
 Compute:
 
@@ -184,15 +175,17 @@ Build a natural-language explanation such as:
 4. Edge Cases Handling
    4.1 New User With No History
 
-User-level score equals post-level score.
+User-level score equals the highest post-level score from the collected posts.
 
-Explanation: "No history; user score derived from post only."
+Explanation: "No additional history; user score derived from collected post(s) only."
 
 4.2 Suspended or Deleted User
 
 User pages return 404 or show restricted content.
 
-Score derived from post only.
+History is empty.
+
+Score derived from collected posts only.
 
 Explanation: "User profile not accessible."
 
@@ -202,11 +195,15 @@ Some posts may not be fully accessible.
 
 Store partial data if available.
 
+Explanation can mention incomplete content where relevant.
+
 4.4 Non-English Posts
 
 Use langdetect to detect language.
 
-Explanation should note reduced accuracy.
+The risk scoring is tuned for English text; for non-English posts, the model still produces a score but with lower confidence.
+
+Explanation should note the detected language and reduced accuracy.
 
 5. Daily Monitoring Design (Concept)
 
@@ -214,49 +211,61 @@ This is not fully implemented due to assignment scope.
 
 Conceptual design:
 
-Maintain a list of flagged users.
+Maintain a list of flagged users with:
+
+- username
+- last_checked_at
+- last_user_score
+- last_explanation
 
 Once per day:
 
-Fetch new posts after the last checked timestamp.
+Fetch new posts after the last checked timestamp for each flagged user (from submitted and comments pages).
 
 Score new posts.
 
-If a new high-risk post is found, write an alert to an output file.
+If a new high-risk post is found, write an entry to an alerts output file (for example data/alerts.csv).
+
+In a production setting, alerts would be pushed to an external system (for example Slack, email, internal dashboards).
 
 This design will be included in the specification document.
 
 6. Project Structure
-   src/
-   config.py
-   models.py (Post, UserPost)
-   reddit_html_client.py (all scraping)
-   collector.py
-   enricher.py
-   scoring/
-   vocab.py
-   post_scoring.py
-   user_scoring.py
-   utils/
-   language.py
-   timeutils.py
-   pipeline.py
-   docs/
-   PLAN.md
-   SPEC.pdf
-   test_plan.md
-   data/
-   raw_posts.json
-   users_enriched.json
-   posts_scored.csv
-   users_scored.csv
-   requirements.txt
-   README.md
+
+src/
+config.py
+models.py (Post, UserPost)
+reddit_html_client.py (all scraping)
+collector.py
+enricher.py
+scoring/
+vocab.py
+post_scoring.py
+user_scoring.py
+utils/
+language.py
+timeutils.py
+pipeline.py
+
+docs/
+PLAN.md
+SPEC.pdf
+test_plan.md
+
+data/
+raw_posts.json
+users_enriched.json
+posts_scored.csv
+users_scored.csv
+
+requirements.txt
+README.md
 
 7. Development Steps
-   Step 1 — Setup
 
-Create new feature branch.
+Step 1 — Setup
+
+Create feature branch.
 
 Add PLAN.md, config, models, and requirements.
 
@@ -268,37 +277,41 @@ Implement reddit_html_client.py.
 
 Methods:
 
-search_posts()
-
-get_user_history()
+- fetch_subreddit_new(subreddit: str, max_posts: int)
+- get_user_history(username: str, since: datetime)
 
 Manual test with small limits.
 
 Step 3 — Collector
 
-Loop through subreddits and queries.
+Loop through target_subreddits.
 
-Fetch posts.
+For each subreddit:
 
-Store in data/raw_posts.json.
+- Scrape newest posts using the HTML client.
+- Convert raw HTML entries into Post instances.
+
+Store all collected posts in data/raw_posts.json.
 
 Step 4 — Enricher
 
 Identify unique authors.
 
-Fetch user history.
+Fetch user history (last ~60 days) for each author.
 
 Store in users_enriched.json.
 
 Step 5 — Scoring
 
-Implement vocabulary lists.
+Implement vocabulary lists and rule-based scoring:
 
-Post-level scoring.
+- post-level scoring for each Post and UserPost
+- user-level scoring based on user history
 
-User-level scoring.
+Export:
 
-Export CSV outputs.
+- posts_scored.csv
+- users_scored.csv
 
 Step 6 — Documentation and Tests
 
@@ -316,14 +329,3 @@ python -m src.pipeline collect
 python -m src.pipeline enrich
 python -m src.pipeline score
 python -m src.pipeline all
-
-If this version looks good, you can now:
-
-Create a new branch:
-git checkout -b feat/html-scraper
-
-Add docs/PLAN.md
-
-Commit and push it.
-
-Tell me “plan added + branch created” and I’ll guide you into implementing the first real module (config.py + models.py).
