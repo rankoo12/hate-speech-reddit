@@ -1,5 +1,6 @@
-praw 
-pandas 
-langdetect 
-python-dotenv 
-pytest 
+requests
+beautifulsoup4
+pandas
+langdetect
+python-dotenv
+pytest
