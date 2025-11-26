@@ -2,7 +2,7 @@ Overview
 
 This project collects, enriches, and scores Reddit posts and users discussing controversial, harmful, or violent content.
 
-We will scrape old.reddit.com using requests + BeautifulSoup, analyze content, and produce:
+We scrape old.reddit.com using requests + BeautifulSoup, analyze content, and produce:
 
 Scored posts feed: language, date_published, post_text, risk_score
 
@@ -10,19 +10,24 @@ Scored risky users feed: username, score, explanation
 
 Enriched user history for approximately two months
 
-Core design decision:
+End-to-end pipeline runnable with one command
 
-We always scrape the newest posts from selected subreddits (no Reddit search).
-We do not pre-filter posts by simple keywords.
-Every collected post is scored using a rule-based risk model.
-Thresholds on the risk score determine which posts and users are considered risky.
+Core design decisions:
 
-This plan defines the pipeline, architecture, modules, and development steps.
+Scrape newest posts from selected subreddits (no Reddit search).
+
+No keyword pre-filtering during collection.
+
+Every collected post is scored with a rule-based risk model.
+
+Thresholds determine which posts and which users are high-risk.
+
+This plan defines the strategy, architecture, modules, testing approach, and documentation deliverables.
 
 1. Data Collection Strategy (HTML Scraping)
 
-We will not use the Reddit API.
-Instead, we scrape old.reddit.com because it is:
+We do not use Reddit’s API for the main pipeline.
+We scrape old.reddit.com because it is:
 
 Static HTML
 
@@ -30,9 +35,9 @@ Easy to parse
 
 Contains post metadata
 
-Supports pagination
+Has simple pagination
 
-Supports user history pages
+Exposes user history pages
 
 1.1 Target Subreddits
 
@@ -54,109 +59,102 @@ Palestine
 
 1.2 How We Scrape Posts (Discovery Step)
 
-We do not use Reddit’s search bar.
+For each subreddit:
 
-For each subreddit in target_subreddits:
-
-Start at:
+Start from:
 https://old.reddit.com/r/{subreddit}/?sort=new
 
-For each page:
-
-Send a GET request with a custom User-Agent.
-Parse <div class="thing"> elements (each represents a post).
-Extract:
-
-- post id
-- title
-- text or selftext (if available)
-- author
-- subreddit
-- timestamp (from <time datetime="...">)
-- permalink / URL
-
-Convert each entry into a Post dataclass instance.
-
-Follow the "next page" link for pagination.
-
-Stop when:
-
-- The total number of posts reaches a configured limit (for example: 150 posts in total), or
-- We have processed a configured number of pages per subreddit, or
-- All posts on the page are older than a lookback window (if enforced at collection time).
-
-Every collected post is later evaluated by the risk scoring model; there is no separate keyword-based discovery filter.
-
-Posts are stored as Post dataclasses and serialized into data/raw_posts.json.
-
-2. Data Enrichment Strategy (User History)
-
-For each unique author from collected posts:
-
-Scrape:
-
-https://old.reddit.com/user/{username}/submitted/
-https://old.reddit.com/user/{username}/comments/
-
-Process:
-
-GET HTML.
-
-Parse <div class="thing"> elements.
+Parse <div class="thing"> for each post.
 
 Extract:
 
-type: submission or comment
+post id
+
+title
+
+text / selftext
+
+author
 
 subreddit
 
-text or comment body
+timestamp
+
+permalink
+
+Follow "next" pagination link until limits reached:
+
+total posts limit
+
+pages per subreddit
+
+age lookback (optional)
+
+Output → data/raw_posts.json
+
+2. Data Enrichment Strategy (User History)
+
+For every unique author from raw posts:
+
+Scrape:
+
+/submitted
+
+/comments
+
+Parse <div class="thing">
+
+Extract:
+
+type (submission / comment)
+
+subreddit
+
+text body
 
 timestamp
 
-URL/permalink
+url/permalink
 
-Convert timestamps to datetimes and keep only items newer than 60 days (approximately 2 months).
-
-Stop when items fall outside the time window or when there are no more pages.
+Filter last 60 days.
 
 Save as UserPost dataclasses.
+
+Output → data/users_enriched.json
 
 3. Risk Scoring Methodology
    3.1 Post-Level Scoring
 
-For each Post.text:
-
-Preprocessing:
-
-- Lowercasing.
-- Basic tokenization (split on whitespace and punctuation).
-
-Features include:
+Input: Post.text
+Features:
 
 Violent keywords
 
-Hate/offensive keywords and slurs
+Hate/offensive keywords
 
-Intensity modifiers (for example: must, should, deserve)
+Intensifiers
 
-Threat patterns (for example: "I will kill", "we should bomb", "they deserve to die")
+Threat patterns
 
 All-caps ratio
 
-Keyword density (multiple strong terms in short text)
+Keyword density
 
-Scoring algorithm:
+Weighted combination → score ∈ [0,1].
 
-Weighted sum of features, normalized to [0, 1].
+Output includes:
 
-Produce a breakdown (which features contributed) for explanation purposes.
+score
+
+label (high/medium/low)
+
+explanation
+
+feature breakdown
 
 3.2 User-Level Scoring
 
-Take the user’s last 60 days of posts and comments (all UserPost items).
-
-Compute:
+Compute for the user’s last 60 days:
 
 max_post_score
 
@@ -164,168 +162,181 @@ average_score
 
 count_high_posts
 
-Example rule:
+total_posts
 
-user_score = max(max_post_score, average_score + 0.2 \* log(1 + count_high_posts))
+Formula:
 
-Build a natural-language explanation such as:
+user_score = max(
+max_post_score,
+average_score + 0.2 \* log(1 + count_high_posts)
+)
 
-"4 violent posts in the last 2 months (‘kill’, ‘bomb’). Highest score: 0.93."
+Explanation example:
+
+"4 high-risk posts in the last 2 months. Highest score: 0.93."
+
+Output → data/users_scored.csv/jsonl
 
 4. Edge Cases Handling
    4.1 New User With No History
 
-User-level score equals the highest post-level score from the collected posts.
+Use post-level fallback.
 
-Explanation: "No additional history; user score derived from collected post(s) only."
+4.2 Suspended/Deleted User
 
-4.2 Suspended or Deleted User
-
-User pages return 404 or show restricted content.
-
-History is empty.
-
-Score derived from collected posts only.
-
-Explanation: "User profile not accessible."
+History empty, score derived from posts only.
 
 4.3 Private Subreddits
 
-Some posts may not be fully accessible.
-
-Store partial data if available.
-
-Explanation can mention incomplete content where relevant.
+Partial content handled gracefully.
 
 4.4 Non-English Posts
 
-Use langdetect to detect language.
+Language noted, reduced scoring confidence.
 
-The risk scoring is tuned for English text; for non-English posts, the model still produces a score but with lower confidence.
+5. Optional Reddit API Fallback (Design Only)
 
-Explanation should note the detected language and reduced accuracy.
+We do not use the Reddit API in the main pipeline.
+But the system provides a clean abstraction that would allow Reddit API usage if credentials exist.
 
-5. Daily Monitoring Design (Concept)
+5.1 Client Abstraction
 
-This is not fully implemented due to assignment scope.
+Define a minimal RedditClient interface:
 
-Conceptual design:
+fetch_new_posts(subreddit, limit) -> List[Post]
+fetch_user_history(username, since) -> List[UserPost]
 
-Maintain a list of flagged users with:
+5.2 HTML Client (current implementation)
 
-- username
-- last_checked_at
-- last_user_score
-- last_explanation
+Uses requests + BeautifulSoup.
 
-Once per day:
+Fully implemented & tested.
 
-Fetch new posts after the last checked timestamp for each flagged user (from submitted and comments pages).
+5.3 API Client (optional stub)
 
-Score new posts.
+Not executed or tested (no credentials).
 
-If a new high-risk post is found, write an entry to an alerts output file (for example data/alerts.csv).
+Placeholder structure exists.
 
-In a production setting, alerts would be pushed to an external system (for example Slack, email, internal dashboards).
+Allows future extension:
 
-This design will be included in the specification document.
+Using praw
+
+Or using OAuth + Reddit API endpoints
+
+5.4 Switching Logic
+
+If env USE_REDDIT_API=true AND credentials exist → API client.
+Else → fallback to HTML scraper.
 
 6. Project Structure
-
-src/
-config.py
-models.py (Post, UserPost)
-reddit_html_client.py (all scraping)
-collector.py
-enricher.py
-scoring/
-vocab.py
-post_scoring.py
-user_scoring.py
-utils/
-language.py
-timeutils.py
-pipeline.py
+   src/
+   config.py
+   models.py
+   reddit_html_client.py
+   collector.py
+   enricher.py
+   scoring/
+   vocab.py
+   post_scoring.py
+   user_scoring.py
+   run_collect.py
+   run_enrich.py
+   run_score.py
+   run_user_score.py
+   run_pipeline.py ← (NEW) full orchestrator
+   data/
+   raw_posts.json
+   users_enriched.json
+   posts_scored.csv / jsonl
+   users_scored.csv / jsonl
 
 docs/
 PLAN.md
-SPEC.pdf
-test_plan.md
+TECH_SPEC.md ← (NEW) technical/business specification
+TEST_PLAN.md ← (NEW) testing strategy + results
+RUNNING.md ← (NEW) how to run, dependencies
 
-data/
-raw_posts.json
-users_enriched.json
-posts_scored.csv
-users_scored.csv
-
+tests/
+unit/
+smoke/
+e2e/
 requirements.txt
 README.md
 
 7. Development Steps
+   Step 1 — Setup
 
-Step 1 — Setup
-
-Create feature branch.
-
-Add PLAN.md, config, models, and requirements.
-
-Commit.
+Base config, models, repo structure.
 
 Step 2 — HTML Scraper Client
 
-Implement reddit_html_client.py.
-
-Methods:
-
-- fetch_subreddit_new(subreddit: str, max_posts: int)
-- get_user_history(username: str, since: datetime)
-
-Manual test with small limits.
+Implement old.reddit.com scraper.
 
 Step 3 — Collector
 
-Loop through target_subreddits.
-
-For each subreddit:
-
-- Scrape newest posts using the HTML client.
-- Convert raw HTML entries into Post instances.
-
-Store all collected posts in data/raw_posts.json.
+Write raw_posts.json.
 
 Step 4 — Enricher
 
-Identify unique authors.
-
-Fetch user history (last ~60 days) for each author.
-
-Store in users_enriched.json.
+Write users_enriched.json.
 
 Step 5 — Scoring
 
-Implement vocabulary lists and rule-based scoring:
+Post scoring → posts_scored.csv
+User scoring → users_scored.csv
 
-- post-level scoring for each Post and UserPost
-- user-level scoring based on user history
+Step 6 — Pipeline Runner (NEW)
 
-Export:
+Single command to run the entire process:
 
-- posts_scored.csv
-- users_scored.csv
+python -m src.run_pipeline
 
-Step 6 — Documentation and Tests
+Step 7 — Testing (NEW)
+7.1 Unit Tests
 
-README: installation and execution instructions.
+post scoring logic
 
-SPEC.pdf: technical and business specification.
+user scoring logic
 
-test_plan.md: test strategy and recorded results.
+config/path tests
+
+7.2 Smoke Tests
+
+run_collect with tiny fixtures
+
+run_enrich
+
+run_score
+
+run_user_score
+
+7.3 End-to-End Test
+
+Full pipeline with mocked data; ensure all output files exist and contain valid rows.
+
+Step 8 — Documentation (NEW)
+8.1 Technical Specification (PDF)
+
+Objectives, methodology, tools, architecture.
+
+8.2 Test Plan Document
+
+Describe strategy + test cases + results.
+
+8.3 Running Instructions
+
+Dependencies, setup, commands, output paths.
 
 8. Running the Pipeline
 
-Commands (to be implemented in pipeline.py):
+Use the orchestrator:
 
-python -m src.pipeline collect
-python -m src.pipeline enrich
-python -m src.pipeline score
-python -m src.pipeline all
+python -m src.run_pipeline
+
+Or run each stage:
+
+python -m src.run_collect
+python -m src.run_enrich
+python -m src.run_score
+python -m src.run_user_score
