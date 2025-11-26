@@ -21,8 +21,8 @@ class ScraperConfig:
     base_url: str = "https://old.reddit.com"
     user_agent: str = "hate-speech-html-scraper/1.0"
     request_delay_seconds: float = 1.0  # polite delay between requests
-    timeout_seconds: float = 10.0  # HTTP timeout
-    max_retries: int = 3  # optional future use for retry logic
+    timeout_seconds: float = 5  # HTTP timeout
+    max_retries: int = 2  # optional future use for retry logic
 
 
 # ---------- Collection configuration ----------
@@ -55,10 +55,12 @@ class CollectionConfig:
     max_posts_per_subreddit: int = 50
 
     # Safety cap for entire run (assignment target ~100–150 posts overall)
-    max_total_posts: int = 500
+    max_total_posts: int = 20
 
     # Lookback for user history (days)
-    user_history_lookback_days: int = 60
+    user_history_lookback_days: int = 10
+
+    max_user_history_items: int = 10
 
 
 # ---------- Scoring configuration ----------
@@ -89,9 +91,16 @@ class PathsConfig:
     """
 
     data_dir: Path = BASE_DIR / "data"
+
+    # Collection / enrichment inputs & outputs
     raw_posts_path: Path = data_dir / "raw_posts.json"
     users_enriched_path: Path = data_dir / "users_enriched.json"
+
+    # Scored posts (Step 5 - post-level scoring)
     posts_scored_path: Path = data_dir / "posts_scored.csv"
+    posts_scored_jsonl_path: Path = data_dir / "posts_scored.jsonl"
+
+    # Scored users (Step 5 - user-level scoring, later)
     users_scored_path: Path = data_dir / "users_scored.csv"
 
 
