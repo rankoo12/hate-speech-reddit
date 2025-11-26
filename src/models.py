@@ -41,3 +41,24 @@ class UserPost:
     kind: Literal["submission", "comment"]  # Type of item
     text: str  # Text body (title+body or comment)
     created_utc: float  # Unix timestamp
+
+
+@dataclass
+class UserRisk:
+    """
+    Aggregated risk profile for a single Reddit user, based on their
+    recent posts and comments.
+
+    This is what we export into users_scored.csv.
+    """
+
+    username: str
+    score: float
+    label: Literal["high", "medium", "low"]
+
+    max_post_score: float
+    average_score: float
+    count_high_posts: int
+    total_posts: int
+
+    explanation: str
