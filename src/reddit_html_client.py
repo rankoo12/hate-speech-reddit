@@ -34,7 +34,35 @@ class RedditHtmlClient:
         self._session.headers.update({"User-Agent": self._cfg.user_agent})
 
     # -------------------------------------------------------------------------
-    # Public API
+    # Public API (protocol-compatible)
+    # -------------------------------------------------------------------------
+
+    def fetch_new_posts(self, subreddit: str, limit: int = 100) -> List[Post]:
+        """
+        Protocol-compatible wrapper for fetching new posts.
+
+        This keeps the existing HTML behavior but exposes the generic
+        `fetch_new_posts` name expected by the RedditClient abstraction.
+        """
+        return self.fetch_subreddit_new(subreddit=subreddit, max_posts=limit)
+
+    def fetch_user_history(self, username: str, since: datetime) -> List[UserPost]:
+        """
+        Protocol-compatible wrapper for fetching user history.
+
+        The existing API expects a max_items cap; for the generic client
+        interface we derive a sensible default from scraper config if
+        available, falling back to a hard-coded limit.
+        """
+        max_items = getattr(self._cfg, "user_history_max_items", 200)
+        return self.get_user_history(
+            username=username,
+            since=since,
+            max_items=max_items,
+        )
+
+    # -------------------------------------------------------------------------
+    # Public API (HTML-specific)
     # -------------------------------------------------------------------------
 
     def fetch_subreddit_new(self, subreddit: str, max_posts: int) -> List[Post]:

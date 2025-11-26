@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict
 from pathlib import Path
 from typing import List
@@ -8,20 +9,52 @@ from typing import List
 from .config import get_config
 from .models import Post
 from .reddit_html_client import RedditHtmlClient
+from .clients.reddit_client import RedditClient, RedditApiClient, RedditApiCredentials
 
 
 class Collector:
     """
     Orchestrates collection of recent posts from configured subreddits
-    using the RedditHtmlClient.
+    using a RedditClient implementation (HTML scraper by default, with
+    an optional Reddit API PoC behind a feature flag).
     """
 
     def __init__(self) -> None:
         self.cfg = get_config()
-        self.client = RedditHtmlClient()
+        self.client: RedditClient = self._build_client()
 
         # Use data_dir from config, filename is local convention here
         self.output_path: Path = self.cfg.paths.data_dir / "raw_posts.json"
+
+    def _build_client(self) -> RedditClient:
+        """
+        Select a Reddit client implementation based on environment.
+
+        Behavior:
+        - If USE_REDDIT_API is not "true" (case-insensitive) → HTML client.
+        - If USE_REDDIT_API is "true" but credentials are missing → HTML client.
+        - If USE_REDDIT_API is "true" and credentials are present → API PoC client.
+
+        This keeps the default behavior identical to the original HTML-only
+        pipeline while allowing an optional API-based PoC to be wired in.
+        """
+        use_api_flag = os.getenv("USE_REDDIT_API", "").lower() == "true"
+        if not use_api_flag:
+            print(
+                "[collector] Using HTML Reddit client (USE_REDDIT_API is not 'true')."
+            )
+            return RedditHtmlClient()
+
+        creds = RedditApiCredentials.from_env()
+        if creds is None:
+            print(
+                "[collector] USE_REDDIT_API='true' but Reddit API env vars are missing; "
+                "falling back to HTML client."
+            )
+            return RedditHtmlClient()
+
+        print("[collector] Using Reddit API client (PoC, untested).")
+        return RedditApiClient(credentials=creds)
 
     def collect_all(self) -> List[Post]:
         all_posts: List[Post] = []
@@ -36,7 +69,8 @@ class Collector:
             fetch_limit = min(per_sub_limit, remaining)
 
             print(f"[collector] Fetching from r/{subreddit} (limit={fetch_limit})...")
-            posts = self.client.fetch_subreddit_new(subreddit, fetch_limit)
+            # Use the protocol-style method so either HTML or API client works.
+            posts = self.client.fetch_new_posts(subreddit=subreddit, limit=fetch_limit)
             print(f"[collector] Retrieved {len(posts)} posts from r/{subreddit}")
 
             all_posts.extend(posts)

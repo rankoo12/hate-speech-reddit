@@ -52,15 +52,15 @@ class CollectionConfig:
     )
 
     # Maximum number of posts to collect per subreddit (upper bound)
-    max_posts_per_subreddit: int = 50
+    max_posts_per_subreddit: int = 30
 
     # Safety cap for entire run (assignment target ~100–150 posts overall)
-    max_total_posts: int = 20
+    max_total_posts: int = 180
 
     # Lookback for user history (days)
     user_history_lookback_days: int = 10
 
-    max_user_history_items: int = 10
+    max_user_history_items: int = 100
 
 
 # ---------- Scoring configuration ----------
