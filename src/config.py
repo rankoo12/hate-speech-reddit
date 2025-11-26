@@ -100,8 +100,9 @@ class PathsConfig:
     posts_scored_path: Path = data_dir / "posts_scored.csv"
     posts_scored_jsonl_path: Path = data_dir / "posts_scored.jsonl"
 
-    # Scored users (Step 5 - user-level scoring, later)
+    # Scored users (Step 5 - user-level scoring)
     users_scored_path: Path = data_dir / "users_scored.csv"
+    users_scored_jsonl_path: Path = data_dir / "users_scored.jsonl"
 
 
 # ---------- Top-level application configuration ----------
