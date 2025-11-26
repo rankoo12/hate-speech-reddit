@@ -55,7 +55,7 @@ class CollectionConfig:
     max_posts_per_subreddit: int = 50
 
     # Safety cap for entire run (assignment target ~100–150 posts overall)
-    max_total_posts: int = 150
+    max_total_posts: int = 500
 
     # Lookback for user history (days)
     user_history_lookback_days: int = 60
