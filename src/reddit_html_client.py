@@ -68,24 +68,59 @@ class RedditHtmlClient:
 
         return collected
 
-    def get_user_history(self, username: str, since: datetime) -> List[UserPost]:
+    def get_user_history(
+        self,
+        username: str,
+        since: datetime,
+        max_items: int,
+    ) -> List[UserPost]:
         """
-        Scrape a user's submissions + comments since a given datetime (UTC).
+        Scrape a user's submissions + comments since a given datetime (UTC),
+        with a hard cap on the total number of UserPost items.
 
         Returns newest-first list of UserPost.
+
+        max_items:
+            Maximum total items to return (submissions + comments combined).
         """
+        if max_items <= 0:
+            return []
+
         if since.tzinfo is None:
             since = since.replace(tzinfo=timezone.utc)
         cutoff_ts = since.timestamp()
 
         history: List[UserPost] = []
-        history.extend(
-            self._fetch_user_stream(username, "submission", "submitted", cutoff_ts)
-        )
-        history.extend(
-            self._fetch_user_stream(username, "comment", "comments", cutoff_ts)
-        )
 
+        # Split budget between submissions and comments in a simple way.
+        # For odd max_items, submissions get the extra one.
+        max_submissions = (max_items + 1) // 2
+        max_comments = max_items - max_submissions
+
+        # Submissions stream
+        if max_submissions > 0:
+            submissions = self._fetch_user_stream(
+                username=username,
+                kind="submission",
+                path="submitted",
+                cutoff_ts=cutoff_ts,
+                max_items=max_submissions,
+            )
+            history.extend(submissions)
+
+        # Comments stream
+        remaining_for_comments = max_items - len(history)
+        if remaining_for_comments > 0:
+            comments = self._fetch_user_stream(
+                username=username,
+                kind="comment",
+                path="comments",
+                cutoff_ts=cutoff_ts,
+                max_items=remaining_for_comments,
+            )
+            history.extend(comments)
+
+        # Newest-first
         history.sort(key=lambda item: item.created_utc, reverse=True)
         return history
 
@@ -99,19 +134,25 @@ class RedditHtmlClient:
         kind: Literal["submission", "comment"],
         path: str,
         cutoff_ts: float,
+        max_items: Optional[int] = None,
     ) -> List[UserPost]:
         """
         Fetch either /user/{username}/submitted/ or /comments/ with pagination.
 
         Stops when:
         - no next page, or
-        - we hit items older than cutoff_ts (pages are newest-first).
+        - we hit items older than cutoff_ts (pages are newest-first), or
+        - we collected max_items items (if max_items is not None).
         """
         collected: List[UserPost] = []
         url = f"{self._cfg.base_url}/user/{username}/{path}/"
         stop = False
 
         while url and not stop:
+            # If we already hit the cap, stop early.
+            if max_items is not None and len(collected) >= max_items:
+                break
+
             html = self._get(url)
             if html is None:
                 break
@@ -119,6 +160,17 @@ class RedditHtmlClient:
             page_items, next_url, stop = self._parse_user_page(
                 html, username, kind, cutoff_ts
             )
+
+            # If we have a max_items cap, trim the last page to respect it.
+            if max_items is not None:
+                remaining = max_items - len(collected)
+                if remaining <= 0:
+                    break
+                if len(page_items) > remaining:
+                    page_items = page_items[:remaining]
+                    # After this page we are at the cap; no need to follow next_url.
+                    stop = True
+
             collected.extend(page_items)
 
             if not next_url or stop:
